@@ -15,10 +15,10 @@ class World:
         kill_factors -> pd.Series of length equal to columns of animal_genes,
                         describes numerical factors determining survivability of animals from the environment
         """
-
-        self.animal_alive = animal_alive
-        self.animal_age = animal_age
-        self.animal_genes = animal_genes
+        # initiate variables in the World
+        self.animal_alive = animal_alive.copy()
+        self.animal_age = animal_age.copy()
+        self.animal_genes = animal_genes.copy()
         self.time = 0
         self.kill_factors = kill_factors
         self.animal_number = animal_alive.sum()
@@ -42,6 +42,7 @@ class World:
         """
         Mutate genes of alive animals, use alive animals as a mask
         """
+        # random gene change of maximum of 0.1 in either direction
         gene_change = 0.1 * np.random.uniform(-1, 1, size=self.animal_genes.shape)
         mask = self.animal_alive.apply(lambda x: int(x))
         self.animal_genes += (gene_change.T * mask.values).T  # adding change only to alive animals
@@ -50,18 +51,19 @@ class World:
         """
         Check for which animals are killed, update the dead_stack and alive animals
         """
-        # algorithm for death from external factors
+        # algorithm for death from external factors - each death factor assumed independent of others
         odds = []
         for i in range(len(self.kill_factors)):
             odds.append(self.kill_factors[i] - self.animal_genes[i])
 
+        # modified sigmoid as a way to convert odds to probabilities
         def sigmoid(x): return 1 / (1 + self.MULT_FACTOR * np.exp(-x))
 
         probabilities = [sigmoid(odd) for odd in odds]
 
         alive = [np.random.uniform(0, 1, size=len(probability)) > probability for probability in probabilities]
         mask = self.animal_alive
-        alive = [cause & mask for cause in alive]  # converts dead from boolean to int
+        alive = [cause & mask for cause in alive]
 
         # death from lack of food - depends on population size
         survival_probability = 1 - self.FOOD_MULTIPLIER * self.animal_number / self.max_pop
@@ -70,12 +72,12 @@ class World:
 
         alive.append(food_allowed)
 
-        alive = pd.Series(np.logical_and.reduce(alive))
+        alive = pd.Series(np.logical_and.reduce(alive))  # combining the results using 'and' operator
 
         # update the animal_alive and dead_stack - bookkeeping
         new_dead = np.logical_xor(self.animal_alive, alive)
         self.animal_alive = alive
-        self.animal_age = self.animal_age * alive.apply(lambda x: int(x))
+        self.animal_age = self.animal_age * alive.apply(lambda x: int(x))  # multiply by zero if dead, by 1 if alive
         self.animal_genes[self.animal_genes.columns] = (self.animal_genes.values.T * alive.apply(lambda x: int(x)).values).T
 
         new_dead = new_dead[new_dead].index.values
@@ -90,13 +92,17 @@ class World:
         """
         Create new animals out of mating of existing ones, update the dead_stack and alive animals
         """
+        # obtaining index of alive animals (index for which animal_alive is True)
         alive = self.animal_alive[self.animal_alive].index.values
+        # updating animal number
         new_animals_number = int(self.PROPORTION_MATING * len(alive))
         self.animal_number += new_animals_number
 
         if self.PRINTOUT:
             print(f"{new_animals_number} animals were born this turn")
 
+        # creating new animals by random combination of genes from other animals
+        # TODO: change for loop to a combined operation for updating the main matrix
         for i in range(new_animals_number):
             chosen_animals = np.random.choice(alive, 2)
             a_genome, b_genome = (self.animal_genes.iloc[chosen_animals[0], :],
@@ -110,15 +116,43 @@ class World:
             self.animal_alive[index] = True
             self.animal_genes.iloc[index, :] = new_genome
 
-    def statistics(self):
+    def statistics(self, return_index=False):
+        """
+        :return: statistics on ages and genes in the current population,
+                 stats include median, minimum, quartilees and maximum + mean and std
+        """
+        # returning the index
+        if return_index:
+            stat_list = ["_median", "_min", "_025", "_075", "_max", "_mean", "_std"]
+            age_list = ["age" + stat for stat in stat_list]
+            gene_list = [[f"gene_{column}" + stat for stat in stat_list] for column in self.animal_genes.columns]
+
+            return_list = ["time", "animal_number"]
+            return_list += [f"death_factor_{column}" for column in self.animal_genes.columns]
+            return_list += age_list
+            for gene in gene_list:
+                return_list += gene
+
+            return return_list
+
+        # returning stats
         age, genes = (self.animal_age[self.animal_alive],
                       [self.animal_genes[i][self.animal_alive] for i in self.animal_genes.columns]
                       )
+
         def stats(array):
+            """
+
+            :param array:
+            :return: median, min, 0.25 quantile, median, 0.75 quantile, max, mean and std of the array
+            """
             return [np.median(array), np.min(array), np.quantile(array, 0.25), np.quantile(array, 0.75), np.max(array),
                     np.mean(array), np.std(array)]
 
-        return_list = stats(age)
+        # include number of animals + death factors -> most useful later e.g. with oscillatory diseases
+        return_list = [self.time, self.animal_number]
+        return_list += [death_factor for death_factor in self.kill_factors]
+        return_list += stats(age)
         for gene in genes:
             return_list += stats(gene)
 
